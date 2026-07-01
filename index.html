@@ -1,0 +1,180 @@
+﻿<!DOCTYPE html>
+<html lang="ru">
+<head>
+    <meta charset="UTF-8">
+    <title>Mandelbrot.js</title>
+    <link rel="icon" type="image/png" href="favicon.png">
+    <style>
+        body, html { margin: 0; padding: 0; overflow: hidden; background: #000; font-family: sans-serif; }
+        canvas { display: block; width: 100vw; height: 100vh; image-rendering: auto; /* Включаем сглаживание */ }
+        .controls {
+            position: absolute; top: 20px; left: 20px;
+            background: rgba(0, 0, 0, 0.8); padding: 15px; border-radius: 8px;
+            color: #fff; display: flex; flex-direction: column; gap: 8px;
+            user-select: none; border: 1px solid #444; pointer-events: none; /* Контролы не мешают мыши */
+        }
+        .ui-element { pointer-events: auto; /* А кнопка работает */ }
+        button {
+            background: #ff3366; color: #fff; border: none; padding: 10px 15px;
+            border-radius: 6px; cursor: pointer; font-size: 15px; font-weight: bold;
+            transition: background 0.2s;
+        }
+        button:hover { background: #ff5588; }
+        .hint { font-size: 12px; color: #ccc; }
+        #zoomLevel { font-weight: bold; color: #00ffcc; }
+    </style>
+</head>
+<body>
+
+    <canvas id="mandelCanvas"></canvas>
+
+    <div class="controls">
+        <button id="homeBtn" class="ui-element">🏠 Сбросить</button>
+        <div class="hint">Колёсико: Плавный Зум</div>
+        <div class="hint">Зажми мышь: Перетаскивание</div>
+        <div id="zoomLevel">Зум: 1.00e+00x</div>
+    </div>
+
+    <script>
+        const canvas = document.getElementById('mandelCanvas');
+        const ctx = canvas.getContext('2d');
+        const homeBtn = document.getElementById('homeBtn');
+        const zoomText = document.getElementById('zoomLevel');
+
+        // ЭТОТ ПАРАМЕТР ОТВЕЧАЕТ ЗА ПРОИЗВОДИТЕЛЬНОСТЬ
+        // 4 — картинка в 4 раза меньше экрана, быстро и гладко
+        // 1 — полное разрешение экрана, красиво, но может лагать на старых ПК
+        const renderScale = 4; 
+
+        let width, height, internalWidth, internalHeight;
+        let imgData, buffer;
+
+        function resize() {
+            width = window.innerWidth;
+            height = window.innerHeight;
+            // Создаем внутренний буфер в низком разрешении
+            internalWidth = Math.floor(width / renderScale);
+            internalHeight = Math.floor(height / renderScale);
+            
+            canvas.width = internalWidth;
+            canvas.height = internalHeight;
+            
+            imgData = ctx.createImageData(internalWidth, internalHeight);
+            // Используем 32-битный буфер для максимальной скорости записи цветов
+            buffer = new Uint32Array(imgData.data.buffer);
+        }
+
+        const initial = { x: -0.5, y: 0.0, zoom: 3.0 };
+        const targetState = { ...initial };
+        const currentState = { ...initial };
+
+        homeBtn.addEventListener('click', () => {
+            targetState.x = initial.x;
+            targetState.y = initial.y;
+            targetState.zoom = initial.zoom;
+        });
+
+        // Кэшируем палитру цветов
+        const colors = new Uint32Array(256);
+        function initColors() {
+            for (let i = 0; i < 256; i++) {
+                const r = Math.floor(Math.sin(0.016 * i + 4) * 127 + 128);
+                const g = Math.floor(Math.sin(0.013 * i + 2) * 127 + 128);
+                const b = Math.floor(Math.sin(0.01 * i + 1) * 127 + 128);
+                colors[i] = (255 << 24) | (b << 16) | (g << 8) | r; // ABGR формат
+            }
+        }
+        initColors();
+
+        // Главный цикл рендера (чистый JS на CPU)
+        function renderMandelbrot() {
+            const zoom = currentState.zoom;
+            const offset_x = currentState.x;
+            const offset_y = currentState.y;
+            
+            // Динамические итерации для баланса скорости/качества
+            const displayZoom = initial.zoom / zoom;
+            const max_iter = Math.floor(120 + Math.log10(displayZoom) * 80);
+
+            // Соотношение сторон для внутреннего буфера
+            const aspect = internalWidth / internalHeight;
+
+            for (let y = 0; y < internalHeight; y++) {
+                const cIm = offset_y + (y / internalHeight - 0.5) * zoom;
+                const rowOffset = y * internalWidth;
+
+                for (let x = 0; x < internalWidth; x++) {
+                    const cRe = offset_x + (x / internalWidth - 0.5) * zoom * aspect;
+
+                    let zRe = cRe, zIm = cIm;
+                    let iter = 0;
+
+                    for (iter = 0; iter < max_iter; iter++) {
+                        const zRe2 = zRe * zRe;
+                        const zIm2 = zIm * zIm;
+                        if (zRe2 + zIm2 > 4.0) break;
+                        zIm = 2.0 * zRe * zIm + cIm;
+                        zRe = zRe2 - zIm2 + cRe;
+                    }
+
+                    if (iter >= max_iter) {
+                        buffer[rowOffset + x] = 0xFF000000; // Черный
+                    } else {
+                        buffer[rowOffset + x] = colors[iter % 256];
+                    }
+                }
+            }
+            
+            // Записываем буфер на холст
+            ctx.putImageData(imgData, 0, 0);
+        }
+
+        let isDragging = false;
+        let lastMouseX = 0, lastMouseY = 0;
+
+        canvas.addEventListener('mousedown', (e) => { isDragging = true; lastMouseX = e.clientX; lastMouseY = e.clientY; });
+        window.addEventListener('mouseup', () => isDragging = false);
+
+        canvas.addEventListener('mousemove', (e) => {
+            if (!isDragging) return;
+            const factor = currentState.zoom / height;
+            targetState.x -= (e.clientX - lastMouseX) * factor;
+            targetState.y -= (e.clientY - lastMouseY) * factor;
+            lastMouseX = e.clientX; lastMouseY = e.clientY;
+        });
+
+        canvas.addEventListener('wheel', (e) => {
+            e.preventDefault();
+            const factor = currentState.zoom / height;
+            const mouseXSt = (e.clientX - width / 2) * factor;
+            const mouseYSt = (e.clientY - height / 2) * factor;
+
+            const zoomFactor = e.deltaY < 0 ? 0.75 : 1.35;
+            
+            // Предел точности float64 в JS
+            if (targetState.zoom * zoomFactor < 5e-14 && zoomFactor < 1.0) return;
+
+            targetState.x += mouseXSt * (1.0 - zoomFactor);
+            targetState.y += mouseYSt * (1.0 - zoomFactor);
+            targetState.zoom *= zoomFactor;
+        });
+
+        function loop() {
+            // Плавное сглаживание координат (LERP)
+            currentState.x += (targetState.x - currentState.x) * 0.2;
+            currentState.y += (targetState.y - currentState.y) * 0.2;
+            currentState.zoom += (targetState.zoom - currentState.zoom) * 0.2;
+
+            const displayZoom = initial.zoom / currentState.zoom;
+            zoomText.innerText = `Зум: ${displayZoom.toExponential(2)}x`;
+
+            renderMandelbrot();
+            requestAnimationFrame(loop);
+        }
+
+        window.addEventListener('resize', resize);
+        resize();
+        requestAnimationFrame(loop);
+    </script>
+</body>
+</html>
