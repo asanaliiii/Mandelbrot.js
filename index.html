@@ -6,18 +6,19 @@
     <link rel="icon" type="image/png" href="favicon.png">
     <style>
         body, html { margin: 0; padding: 0; overflow: hidden; background: #000; font-family: sans-serif; }
-        canvas { display: block; width: 100vw; height: 100vh; image-rendering: auto; /* Включаем сглаживание */ }
+        canvas { display: block; width: 100vw; height: 100vh; image-rendering: auto; }
         .controls {
             position: absolute; top: 20px; left: 20px;
             background: rgba(0, 0, 0, 0.8); padding: 15px; border-radius: 8px;
             color: #fff; display: flex; flex-direction: column; gap: 8px;
-            user-select: none; border: 1px solid #444; pointer-events: none; /* Контролы не мешают мыши */
+            user-select: none; border: 1px solid #444; pointer-events: none;
         }
-        .ui-element { pointer-events: auto; /* А кнопка работает */ }
+        .ui-element { pointer-events: auto; }
+        .btn-group { display: flex; gap: 5px; }
         button {
             background: #ff3366; color: #fff; border: none; padding: 10px 15px;
             border-radius: 6px; cursor: pointer; font-size: 15px; font-weight: bold;
-            transition: background 0.2s;
+            transition: background 0.2s; flex: 1;
         }
         button:hover { background: #ff5588; }
         .hint { font-size: 12px; color: #ccc; }
@@ -29,20 +30,24 @@
     <canvas id="mandelCanvas"></canvas>
 
     <div class="controls">
-        <button id="homeBtn" class="ui-element">🏠 Reset to 1e+0x</button>
-        <div class="hint">For zoom use mouse</div>
-        <div id="zoomLevel">Coordinates: 1.00e+00x</div>
+        <button id="homeBtn" class="ui-element">🏠 Reset</button>
+        <div class="btn-group ui-element">
+            <button id="zoomInBtn">➕ Zoom In</button>
+            <button id="zoomOutBtn">➖ Zoom Out</button>
+        </div>
+        <div class="hint">For zoom use mouse wheel or buttons</div>
+        <div id="zoomLevel">Зум: 1.00e+00x</div>
     </div>
 
     <script>
         const canvas = document.getElementById('mandelCanvas');
         const ctx = canvas.getContext('2d');
         const homeBtn = document.getElementById('homeBtn');
+        const zoomInBtn = document.getElementById('zoomInBtn');
+        const zoomOutBtn = document.getElementById('zoomOutBtn');
         const zoomText = document.getElementById('zoomLevel');
 
-        // ЭТОТ ПАРАМЕТР ОТВЕЧАЕТ ЗА ПРОИЗВОДИТЕЛЬНОСТЬ
-        // 4 — картинка в 4 раза меньше экрана, быстро и гладко
-        // 1 — полное разрешение экрана, красиво, но может лагать на старых ПК
+        // Рендер-масштаб (4 — быстро, 1 — идеально четко)
         const renderScale = 4; 
 
         let width, height, internalWidth, internalHeight;
@@ -51,7 +56,6 @@
         function resize() {
             width = window.innerWidth;
             height = window.innerHeight;
-            // Создаем внутренний буфер в низком разрешении
             internalWidth = Math.floor(width / renderScale);
             internalHeight = Math.floor(height / renderScale);
             
@@ -59,7 +63,6 @@
             canvas.height = internalHeight;
             
             imgData = ctx.createImageData(internalWidth, internalHeight);
-            // Используем 32-битный буфер для максимальной скорости записи цветов
             buffer = new Uint32Array(imgData.data.buffer);
         }
 
@@ -73,29 +76,40 @@
             targetState.zoom = initial.zoom;
         });
 
-        // Кэшируем палитру цветов
+        // Функция изменения зума относительно центра экрана
+        function applyZoom(zoomFactor) {
+            // Защита от полного зануления (когда JS превратит zoom в 0 и сломает математику)
+            if (targetState.zoom * zoomFactor <= 0 || isNaN(targetState.zoom * zoomFactor)) return;
+            
+            // Предел точности float64: прекращаем зум, если масштаб становится неразличим для процессора
+            if (targetState.zoom * zoomFactor < 1e-16 && zoomFactor < 1.0) return;
+
+            targetState.zoom *= zoomFactor;
+        }
+
+        zoomInBtn.addEventListener('click', () => applyZoom(0.6));
+        zoomOutBtn.addEventListener('click', () => applyZoom(1.5));
+
         const colors = new Uint32Array(256);
         function initColors() {
             for (let i = 0; i < 256; i++) {
                 const r = Math.floor(Math.sin(0.016 * i + 4) * 127 + 128);
                 const g = Math.floor(Math.sin(0.013 * i + 2) * 127 + 128);
                 const b = Math.floor(Math.sin(0.01 * i + 1) * 127 + 128);
-                colors[i] = (255 << 24) | (b << 16) | (g << 8) | r; // ABGR формат
+                colors[i] = (255 << 24) | (b << 16) | (g << 8) | r;
             }
         }
         initColors();
 
-        // Главный цикл рендера (чистый JS на CPU)
         function renderMandelbrot() {
             const zoom = currentState.zoom;
             const offset_x = currentState.x;
             const offset_y = currentState.y;
             
-            // Динамические итерации для баланса скорости/качества
             const displayZoom = initial.zoom / zoom;
-            const max_iter = Math.floor(120 + Math.log10(displayZoom) * 80);
+            // Увеличиваем детализацию при глубоком погружении
+            const max_iter = Math.floor(120 + Math.log10(Math.max(1, displayZoom)) * 90);
 
-            // Соотношение сторон для внутреннего буфера
             const aspect = internalWidth / internalHeight;
 
             for (let y = 0; y < internalHeight; y++) {
@@ -117,14 +131,13 @@
                     }
 
                     if (iter >= max_iter) {
-                        buffer[rowOffset + x] = 0xFF000000; // Черный
+                        buffer[rowOffset + x] = 0xFF000000;
                     } else {
                         buffer[rowOffset + x] = colors[iter % 256];
                     }
                 }
             }
             
-            // Записываем буфер на холст
             ctx.putImageData(imgData, 0, 0);
         }
 
@@ -150,8 +163,7 @@
 
             const zoomFactor = e.deltaY < 0 ? 0.75 : 1.35;
             
-            // Предел точности float64 в JS
-            if (targetState.zoom * zoomFactor < 5e-14 && zoomFactor < 1.0) return;
+            if (targetState.zoom * zoomFactor < 1e-16 && zoomFactor < 1.0) return;
 
             targetState.x += mouseXSt * (1.0 - zoomFactor);
             targetState.y += mouseYSt * (1.0 - zoomFactor);
@@ -159,7 +171,6 @@
         });
 
         function loop() {
-            // Плавное сглаживание координат (LERP)
             currentState.x += (targetState.x - currentState.x) * 0.2;
             currentState.y += (targetState.y - currentState.y) * 0.2;
             currentState.zoom += (targetState.zoom - currentState.zoom) * 0.2;
